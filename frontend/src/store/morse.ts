@@ -1,7 +1,8 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { MORSE_TABLE, REVERSE_TABLE, textToMorse, morseToText } from '../utils/morse-code'
-import type { TrainMode, HistoryEntry } from '../types'
+import { SCENARIOS } from '../utils/scenarios'
+import type { TrainMode, HistoryEntry, ScenarioMastery, ScenarioTaskResult } from '../types'
 
 export const useMorseStore = defineStore('morse', () => {
   const inputText = ref('')
@@ -90,10 +91,119 @@ export const useMorseStore = defineStore('morse', () => {
     history.value = []
   }
 
+  const scenarioMasteries = ref<Record<string, ScenarioMastery>>({})
+  const activeScenarioId = ref<string | null>(null)
+  const activeTaskId = ref<string | null>(null)
+  const scenarioInput = ref('')
+  const scenarioPlaying = ref(false)
+
+  const scenarios = SCENARIOS
+
+  const activeScenario = computed(() =>
+    scenarios.find(s => s.id === activeScenarioId.value) ?? null
+  )
+
+  const activeTask = computed(() =>
+    activeScenario.value?.tasks.find(t => t.id === activeTaskId.value) ?? null
+  )
+
+  function getOrCreateTaskResult(scenarioId: string, taskId: string): ScenarioTaskResult {
+    if (!scenarioMasteries.value[scenarioId]) {
+      scenarioMasteries.value[scenarioId] = {
+        scenarioId,
+        taskResults: {},
+        completedAt: null,
+      }
+    }
+    const mastery = scenarioMasteries.value[scenarioId]
+    if (!mastery.taskResults[taskId]) {
+      mastery.taskResults[taskId] = {
+        taskId,
+        attempts: 0,
+        correct: 0,
+        lastInput: '',
+        mastered: false,
+      }
+    }
+    return mastery.taskResults[taskId]
+  }
+
+  function selectScenario(scenarioId: string) {
+    activeScenarioId.value = scenarioId
+    activeTaskId.value = null
+    scenarioInput.value = ''
+  }
+
+  function selectTask(taskId: string) {
+    activeTaskId.value = taskId
+    scenarioInput.value = ''
+  }
+
+  function checkScenarioAnswer() {
+    if (!activeScenarioId.value || !activeTaskId.value) return
+    const task = activeTask.value
+    if (!task) return
+
+    const normalizedInput = scenarioInput.value.trim().toUpperCase()
+    const normalizedExpected = task.text.toUpperCase()
+    const isCorrect = normalizedInput === normalizedExpected
+
+    const result = getOrCreateTaskResult(activeScenarioId.value, activeTaskId.value)
+    result.attempts++
+    if (isCorrect) result.correct++
+    result.lastInput = scenarioInput.value
+    result.mastered = result.correct >= 1
+
+    const mastery = scenarioMasteries.value[activeScenarioId.value]
+    if (mastery) {
+      const scenario = scenarios.find(s => s.id === activeScenarioId.value)
+      if (scenario) {
+        const allMastered = scenario.tasks.every(t =>
+          mastery.taskResults[t.id]?.mastered
+        )
+        if (allMastered) {
+          mastery.completedAt = Date.now()
+        }
+      }
+    }
+
+    return isCorrect
+  }
+
+  function getScenarioProgress(scenarioId: string) {
+    const mastery = scenarioMasteries.value[scenarioId]
+    if (!mastery) return { mastered: 0, total: 0, percent: 0 }
+    const scenario = scenarios.find(s => s.id === scenarioId)
+    if (!scenario) return { mastered: 0, total: 0, percent: 0 }
+    const mastered = scenario.tasks.filter(t => mastery.taskResults[t.id]?.mastered).length
+    const total = scenario.tasks.length
+    return { mastered, total, percent: total ? Math.round(mastered / total * 100) : 0 }
+  }
+
+  function resetScenarioProgress(scenarioId: string) {
+    delete scenarioMasteries.value[scenarioId]
+    if (activeScenarioId.value === scenarioId) {
+      activeTaskId.value = null
+      scenarioInput.value = ''
+    }
+  }
+
+  async function playScenarioTask() {
+    if (!activeTask.value) return
+    const morse = textToMorse(activeTask.value.text)
+    scenarioPlaying.value = true
+    await playMorse(morse)
+    scenarioPlaying.value = false
+  }
+
   return {
     inputText, morseOutput, decodedText, wpm, frequency, volume,
     trainMode, history, quizChar, userAnswer, score, isPlaying,
     dotDuration, encode, decode, playMorse, playTone,
-    generateQuiz, checkAnswer, resetScore
+    generateQuiz, checkAnswer, resetScore,
+    scenarioMasteries, activeScenarioId, activeTaskId, scenarioInput,
+    scenarioPlaying, scenarios, activeScenario, activeTask,
+    selectScenario, selectTask, checkScenarioAnswer,
+    getScenarioProgress, resetScenarioProgress, playScenarioTask
   }
 })
